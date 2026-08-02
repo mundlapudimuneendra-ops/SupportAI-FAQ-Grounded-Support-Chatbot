@@ -1,0 +1,4 @@
+# Optional: real LLM support via Anthropic Claude.
+# If anthropic is not installed or ANTHROPIC_API_KEY is not set, SupportAI
+# automatically falls back to a template-based "simulator" answer.
+anthropic>=0.40
