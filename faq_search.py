@@ -194,7 +194,7 @@ def _print_faq(faq: dict) -> None:
     # Indent the answer so the arrow stays visually attached to the text.
     answer_lines = faq["answer"].splitlines() or [faq["answer"]]
     for i, line in enumerate(answer_lines):
-        prefix = "  → " if i == 0 else "    "
+        prefix = "  -> " if i == 0 else "    "
         print(f"{prefix}{line}")
 
 

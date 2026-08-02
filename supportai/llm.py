@@ -203,27 +203,57 @@ def _simulate_answer(
     """Deterministic template answer used when no LLM is available.
 
     The template is intentionally simple but it must satisfy the same
-    "grounded in the FAQ context" rule as the real LLM: if there's no
-    retrieved context, the simulator says so instead of guessing.
+    "grounded in the FAQ context" rule as the real LLM:
+
+    * If no FAQ was retrieved (above the similarity threshold), the
+      simulator returns the "no match" message instead of inventing an
+      answer from an unrelated FAQ.
+    * If a FAQ was retrieved, the simulator highlights the top match in
+      a labelled block and appends any related FAQs as suggestions.
     """
+    # --- Case 1: no FAQ met the retrieval threshold ---------------------
     if not retrieved:
+        # The retriever already enforces the minimum similarity threshold;
+        # if we reach here it means nothing in the knowledge base is
+        # relevant to the user's question. Tell the user clearly rather
+        # than guessing from an unrelated FAQ.
         msg = (
-            "I don't have a matching FAQ for that question. "
-            "Please contact our human support team for help."
+            "Sorry, your question isn't covered by the FAQ knowledge base.\n\n"
+            "I can answer questions about:\n"
+            "• Account\n"
+            "• Billing\n"
+            "• Orders\n"
+            "• Shipping"
         )
+
         if error_note:
-            msg += f" (LLM unavailable: {error_note})"
+            msg += f"\n\n(LLM unavailable: {error_note})"
+
         return msg
 
+    # --- Case 2: highlight the matched FAQ -----------------------------
     top = retrieved[0]
-    answer = top["answer"]
-    suffix = f" Source: {top['id']}."
+
+    response = (
+        f"📌 Matched FAQ\n"
+        f"----------------------------------\n"
+        f"ID       : {top['id']}\n"
+        f"Category : {top['category']}\n"
+        f"Question : {top['question']}\n"
+        f"Score    : {top['score']:.2f}\n"
+        f"----------------------------------\n\n"
+        f"Answer:\n{top['answer']}\n\n"
+        f"Source: {top['id']}"
+    )
+
+    # Append any additional retrieved FAQs as related suggestions so the
+    # user can see what else the retriever surfaced.
     if len(retrieved) > 1:
         alts = ", ".join(f["id"] for f in retrieved[1:])
-        suffix += f" Related: {alts}."
+        response += f"\n\nRelated: {alts}."
     if error_note:
-        suffix += f" (LLM unavailable, used template: {error_note})"
-    return answer + suffix
+        response += f"\n\n(LLM unavailable, used template: {error_note})"
+    return response
 
 
 # ---------------------------------------------------------------------------

@@ -71,12 +71,15 @@ class ChatSession:
 # ---------------------------------------------------------------------------
 def _print_turn(answer: str, retrieved: list[dict]) -> None:
     """Display one assistant turn to the user."""
-    # Show the retrieved FAQs first so the user can sanity-check the answer.
+    # Show the retrieved FAQ count first so the user can sanity-check
+    # whether the answer is grounded in real matches. Use ``FAQ(s)`` so
+    # the format is identical for both branches.
+    count = len(retrieved)
     if retrieved:
-        print(f"  [retrieved] {len(retrieved)} FAQ(s): " +
-              ", ".join(f"{f['id']} ({f['category']})" for f in retrieved))
+        ids = ", ".join(f"{f['id']} ({f['category']})" for f in retrieved)
+        print(f"  [retrieved] {count} FAQ(s): {ids}")
     else:
-        print("  [retrieved] 0 FAQs")
+        print(f"  [retrieved] 0 FAQ(s)")
     print(f"SupportAI: {answer}")
 
 

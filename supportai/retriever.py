@@ -8,10 +8,14 @@ sentence-transformers) would be overkill for a 7-entry knowledge base.
 
 Public surface
 --------------
-- ``search_faqs(faqs, query, top_k=3)`` — the function the rest of SupportAI
-  uses to fetch context. Falls back to the Task 1 keyword search if the
-  query produces no TF-IDF hits but does produce keyword hits, so behaviour
-  is never worse than Task 1.
+- ``search_faqs(faqs, query, top_k=3, min_score=0.25)`` — the function the
+  rest of SupportAI uses to fetch context. Only FAQs whose cosine
+  similarity is >= ``min_score`` are returned; if none meet the threshold,
+  an empty list is returned so the LLM layer can render a fallback
+  response instead of presenting a low-confidence answer.
+- ``rank_faqs(faqs, query, top_k=3, min_score=0.25)`` — lower-level helper
+  that returns the same ranked list (with ``score`` populated) without
+  the keyword-search fallback.
 """
 
 from __future__ import annotations
@@ -22,19 +26,47 @@ from typing import Iterable
 
 # Reuse Task 1 — the brief explicitly says "extend and reuse what you
 # create here", not "rebuild from scratch".
-from faq_search import FAQS as _DEFAULT_FAQS, search_by_keyword
+from faq_search import FAQS as _DEFAULT_FAQS
 
 # A token is a run of letters/digits; everything else is a separator. We
 # lowercase and drop tokens shorter than 2 chars because single letters
 # carry almost no signal at this corpus size.
 _TOKEN_RE = re.compile(r"[A-Za-z0-9]+")
 
+# Small English stopword list. These words appear in nearly every FAQ and
+# in nearly every user query, so they add noise to cosine similarity
+# without contributing any real semantic match. Filtering them out keeps
+# the threshold meaningful — without this, e.g. "what is the meaning of
+# life" would falsely score high against any FAQ that contains
+# "what"/"is"/"the" in its question/keywords.
+_STOPWORDS = frozenset({
+    "a", "an", "and", "are", "as", "at", "be", "by", "for", "from",
+    "has", "have", "how", "in", "is", "it", "its", "of", "on", "or",
+    "that", "the", "to", "was", "were", "what", "when", "where", "which",
+    "who", "why", "will", "with", "you", "your", "i", "do", "does",
+    "did", "can", "could", "should", "would", "my", "me", "we", "our",
+})
+
+# Minimum cosine similarity required for a FAQ to be considered relevant.
+# Anything below this is treated as "no match" so we don't surface weak
+# or unrelated answers to the user. Exposed as a module constant so
+# callers (and tests) can reference the same value.
+DEFAULT_MIN_SCORE = 0.25
+
 
 def tokenize(text: str) -> list[str]:
-    """Split ``text`` into lower-cased word tokens of length >= 2."""
+    """Split ``text`` into lower-cased tokens with stopwords removed.
+
+    Tokens shorter than 2 chars and common English stopwords are dropped
+    so they don't dominate the cosine similarity score.
+    """
     if not text:
         return []
-    return [t.lower() for t in _TOKEN_RE.findall(text) if len(t) >= 2]
+    return [
+        t.lower()
+        for t in _TOKEN_RE.findall(text)
+        if len(t) >= 2 and t.lower() not in _STOPWORDS
+    ]
 
 
 def _doc_text(faq: dict) -> str:
@@ -136,12 +168,16 @@ def rank_faqs(
     faqs: Iterable[dict],
     query: str,
     top_k: int = 3,
+    min_score: float = DEFAULT_MIN_SCORE,
 ) -> list[dict]:
     """Rank ``faqs`` for ``query`` by TF-IDF cosine similarity.
 
-    Returns up to ``top_k`` FAQs with a positive score, ordered by score
-    descending. Each returned dict is augmented with a ``"score"`` key so
-    callers can show confidence / debug.
+    Returns up to ``top_k`` FAQs whose cosine similarity is greater than or
+    equal to ``min_score``, ordered by score descending. Each returned dict
+    is augmented with a ``"score"`` key so callers can show confidence /
+    debug.
+
+    If no FAQ meets the threshold, the returned list is empty.
     """
     faq_list = list(faqs)
     if not faq_list or not query or not query.strip():
@@ -155,7 +191,10 @@ def rank_faqs(
     scored: list[tuple[float, dict]] = []
     for faq, vec, norm in zip(faq_list, vectors, norms):
         score = cosine(q_vec, q_norm, vec, norm)
-        if score > 0:
+
+        # Only keep FAQs that meet the minimum similarity threshold.
+        # This prevents low-relevance matches from being returned to the user.
+        if score >= min_score:
             # Copy so we don't mutate the caller's FAQ dicts.
             enriched = dict(faq)
             enriched["score"] = score
@@ -165,30 +204,33 @@ def rank_faqs(
     return [faq for _, faq in scored[:top_k]]
 
 
-def search_faqs(faqs: list[dict], query: str, top_k: int = 3) -> list[dict]:
+def search_faqs(
+    faqs: list[dict],
+    query: str,
+    top_k: int = 3,
+    min_score: float = DEFAULT_MIN_SCORE,
+) -> list[dict]:
     """High-level helper used by Tasks 3 and 4.
 
-    Returns the top-K FAQs for ``query``. If TF-IDF produces nothing (e.g.
-    the query is one short word that doesn't appear in any document's
-    vocabulary), we fall back to Task 1's keyword search so the user
-    always gets *some* answer when one exists in the corpus.
+    Returns the top-K FAQs for ``query`` whose cosine similarity is greater
+    than or equal to ``min_score``. If no FAQ meets the threshold, an empty
+    list is returned so the caller (LLM layer) can render the fallback
+    "no match" response instead of presenting a low-confidence answer.
+
+    If TF-IDF produces nothing (e.g. the query is one short word that
+    doesn't appear in any document's vocabulary) and no keyword hits exist
+    either, the fallback is left to the caller.
     """
     if not query or not query.strip():
         return []
 
-    ranked = rank_faqs(faqs, query, top_k=top_k)
+    ranked = rank_faqs(faqs, query, top_k=top_k, min_score=min_score)
     if ranked:
         return ranked
 
-    # Fallback: keyword search from Task 1, but only count "score" for it
-    # so downstream code can still inspect / display it.
-    keyword_hits = search_by_keyword(faqs, query)[:top_k]
-    for i, faq in enumerate(keyword_hits):
-        # Decay score so the TF-IDF wins still rank above the fallback.
-        enriched = dict(faq)
-        enriched["score"] = 0.0 - (i + 1) * 1e-6
-        keyword_hits[i] = enriched
-    return keyword_hits
+    # No TF-IDF match met the threshold; return an empty list so the
+    # caller can present the "no match" response instead of a weak hit.
+    return []
 
 
 # ---------------------------------------------------------------------------
