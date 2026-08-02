@@ -62,8 +62,8 @@ FAQ-Knowledge-Base-Foundation/
 ## 1. Clone the Repository
 
 ```bash
-git clone https://github.com/mundlapudimuneendra-ops/FAQ-Knowledge-Base-Foundation.git
-cd FAQ-Knowledge-Base-Foundation
+git clone https://github.com/mundlapudimuneendra-ops/SupportAI-FAQ-Grounded-Support-Chatbot.git
+cd SupportAI-FAQ-Grounded-Support-Chatbot
 ```
 
 ## 2. Create a Virtual Environment (Recommended)
